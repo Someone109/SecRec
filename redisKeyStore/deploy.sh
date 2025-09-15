@@ -23,7 +23,7 @@ subjectAltName = @alt_names
 [ alt_names ]
 DNS.1 = localhost
 IP.1 = 127.0.0.1
-DNS.2 = redisKeyStore-tls
+DNS.2 = redisKeyStore
 
 EOF
 
@@ -52,48 +52,24 @@ docker secret create redisKeyStore_server.crt redisKeyStore-server.crt
 docker secret create redisKeyStore_client.key redisKeyStore-client.key
 docker secret create redisKeyStore_client.crt redisKeyStore-client.crt
 
-# Build stunnel image
-docker build -t my-stunnel:1.0 ./stunnel
 
 # Create overlay network
 docker network inspect redisKeyStore-net >/dev/null 2>&1 || docker network create --driver overlay redisKeyStore-net
-docker network inspect redisKeyStore-outerNet >/dev/null 2>&1 || docker network create --driver overlay redisKeyStore-outerNet
 
-
-# Deploy redisKeyStore and stunnel services
+# Deploy redisKeyStore services
 docker service create --name redisKeyStore \
---replicas 1 \
---network redisKeyStore-net \
-redis:7.2
-
-# Deploy stunnel service with secrets and publish port
-docker service create --name redisKeyStore-tls \
 --replicas 1 \
 --network redisKeyStore-net \
 --secret redisKeyStore_server.key \
 --secret redisKeyStore_server.crt \
 --secret redisKeyStore_ca.crt \
---secret redisKeyStore_client.key \
---secret redisKeyStore_client.crt \
---network redisKeyStore-outerNet \
-my-stunnel:1.0
+redis:7.2 \
+redis-server \
+--port 0 \
+--tls-port 16379 \
+--tls-cert-file /run/secrets/redisKeyStore_server.crt \
+--tls-key-file /run/secrets/redisKeyStore_server.key \
+--tls-ca-cert-file /run/secrets/redisKeyStore_ca.crt \
+--tls-auth-clients yes
 
-
-
-# Example: Deploy your backend service to the same overlay network as stunnel
-# and set the correct Redis host/port environment variables
-#
-# docker service create --name backendai-app \
-#   --network redisKeyStore-outerNet \
-#   --env REDIS_HOST=redisKeyStore-tls \
-#   --env REDIS_PORT=16379 \
-#   --secret redisKeyStore_ca.crt \
-#   --secret redisKeyStore_client.key \
-#   --secret redisKeyStore_client.crt \
-#   <other options> \
-#   <your-backend-image>
-
-# Now your backend can connect to Redis via stunnel using:
-#   host: redisKeyStore-tls
-#   port: 16379
 

@@ -3,10 +3,7 @@ import crypto from "crypto";
 
 const PRIVATE_KEY_PASSPHRASE = "your-secure-passphrase";
 
-const publicKeyPem = fs.readFileSync(
-  "../backendai/backendai_public.pem",
-  "utf8"
-);
+const publicKeyPem = fs.readFileSync("backendai_public.pem", "utf8");
 
 function encryptSymmetricKey(symmetricKey, publicKeyPem) {
   return crypto.publicEncrypt(
@@ -71,7 +68,7 @@ function GenerateKeyPair() {
 
 const image = fs.readFileSync(`./test.jpg`);
 
-const response = await fetch("http://localhost:3000/session");
+const response = await fetch("http://localhost:8080/session");
 const sessionData = await response.json();
 
 const publicKey = sessionData.publicKey;
@@ -111,7 +108,7 @@ const hashedImageAndKey = crypto
 // Encrypt the hash with server's public key to create a signature that can be verified by the backend server
 const clientKeySignature = encryptSymmetricKey(hashedImageAndKey, publicKey);
 
-const imageResponse = await fetch("http://localhost:3000/imageup", {
+const imageResponse = await fetch("http://localhost:8080/imageup", {
   method: "POST",
   headers: {
     "Content-Type": "application/json",
@@ -127,6 +124,7 @@ const imageResponse = await fetch("http://localhost:3000/imageup", {
 });
 
 const imageResult = await imageResponse.json();
+
 //console.log("Image Upload Result:", imageResult);
 
 const encryptedText = imageResult.text;

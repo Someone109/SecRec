@@ -7,9 +7,9 @@
     "start": "node dist/index.js"
   },
   "dependencies": {
-    "@hono/node-server": "^1.19.0",
+    "@types/express": "^5.0.3",
+    "express": "^5.1.0",
     "file-type": "^19.6.0",
-    "hono": "^4.9.6",
     "node-tesseract-ocr": "^2.2.1",
     "redis": "^5.8.2"
   },

@@ -5,7 +5,7 @@ import { build } from "esbuild";
 const timeStart = new Date();
 const TARGET_NODE_VERSION = "node20";
 
-const minifyAndTreeShake = false;
+const minifyAndTreeShake = true;
 
 const currDir = process.cwd();
 console.log("Targeting node version: " + TARGET_NODE_VERSION);

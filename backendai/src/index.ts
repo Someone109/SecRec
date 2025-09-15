@@ -1,5 +1,4 @@
-import { serve } from "@hono/node-server";
-import { Hono } from "hono";
+import express from "express";
 import client from "./redis.ts";
 import {
   GenerateKeyPair,
@@ -7,43 +6,66 @@ import {
   decryptData,
   encryptData,
   decryptWithAes,
-  hashBuffer,
 } from "./crypto.ts";
 import { recognizeTextFromImage } from "./ocr.ts";
 import { fileTypeFromBuffer } from "file-type";
-import { logger } from "hono/logger";
-
+import fs from "fs";
+import https from "https";
 import crypto from "crypto";
+import type { TLSSocket } from "tls";
 
-const ENABLE_LOGGING = true;
+const REDIS_TTL = 60; // 1 minute
 
-const REDIS_TTL = 60 * 5; // 5 minutes
+const app = express();
 
-const app = new Hono();
+// Parse JSON bodies
+app.use(express.json());
 
-app.get("/", (c) => {
-  return c.text("Hono app is running!");
+// mTLS validation middleware
+app.use((req, res, next) => {
+  const socket = req.socket as TLSSocket; // tell TS it's a TLSSocket
+  const cert = socket.getPeerCertificate?.(true);
+  const authorized = socket.authorized;
+
+  console.log("mTLS validation:", {
+    authorized,
+    hasClientCert: cert && Object.keys(cert).length > 0,
+    clientCN: cert?.subject?.CN || "none",
+  });
+
+  if (!authorized || !cert || Object.keys(cert).length === 0) {
+    return res.status(401).json({ error: "Valid client certificate required" });
+  }
+
+  // Store cert info in request
+  (req as any).clientCert = cert;
+  (req as any).clientAuthorized = authorized;
+  next();
 });
 
-if (ENABLE_LOGGING) {
-  app.use(logger());
-}
+// Logging middleware
+app.use((req, res, next) => {
+  console.log(`${new Date().toISOString()} - ${req.method} ${req.path}`);
+  next();
+});
 
-app.get("/session", async (c) => {
+app.get("/session", async (req, res) => {
   try {
+    console.log("Session endpoint hit");
     const { publicKey, privateKey } = GenerateKeyPair();
-    await client.set(`key:${publicKey}`, privateKey, { EX: REDIS_TTL }); // Store private key with expiration
+    await client.set(`key:${publicKey}`, privateKey, { EX: REDIS_TTL });
     const signature = signData(publicKey);
 
-    return c.json({ publicKey: publicKey, signature: signature });
+    res.json({ publicKey, signature });
   } catch (err) {
     console.error("Session error:", err);
+    res.status(500).json({ error: "Internal server error" });
   }
 });
 
-app.post("/imageup", async (c) => {
+app.post("/imageup", async (req, res) => {
   try {
-    const body = await c.req.json();
+    const body = req.body;
     const {
       image,
       encryptedKey,
@@ -60,8 +82,9 @@ app.post("/imageup", async (c) => {
       !clientPublicKey ||
       !clientEncryptionKey
     ) {
-      return c.json({ error: "Missing required fields." }, 400);
+      return res.status(400).json({ error: "Missing required fields." });
     }
+
     // Declare variables once
     let encryptedImageBuffer: Buffer;
     let encryptedAesKeyBuffer: Buffer;
@@ -76,36 +99,40 @@ app.post("/imageup", async (c) => {
       encryptedAesKeyBuffer = Buffer.from(encryptedKey);
       ivBuffer = Buffer.from(iv);
     } catch {
-      return c.json({ error: "Invalid encoding in one or more fields." }, 400);
+      return res
+        .status(400)
+        .json({ error: "Invalid encoding in one or more fields." });
     }
 
     // Retrieve private key for decrypting AES key
     privateKey = await client.get(`key:${clientPublicKey}`);
     if (!privateKey) {
-      return c.json({ error: "Invalid or expired public key." }, 400);
+      return res.status(400).json({ error: "Invalid or expired public key." });
     }
 
     // Decrypt AES key with RSA private key
     try {
       aesKey = decryptData(encryptedAesKeyBuffer, privateKey);
     } catch (e) {
-      return c.json({ error: "Failed to decrypt AES key." }, 400);
+      return res.json({ error: "Failed to decrypt AES key." }).status(400);
     }
 
     // Decrypt image with AES key
     try {
       decryptedImage = decryptWithAes(encryptedImageBuffer, aesKey, ivBuffer);
     } catch (e) {
-      return c.json({ error: "Failed to decrypt image with AES key." }, 400);
+      return res
+        .json({ error: "Failed to decrypt image with AES key." })
+        .status(400);
     }
 
     // Validate image type using file-type
     const fileType = await fileTypeFromBuffer(decryptedImage);
     if (!fileType || !fileType.mime.startsWith("image/")) {
-      return c.json({ error: "Uploaded file is not a valid image." }, 400);
+      return res
+        .json({ error: "Uploaded file is not a valid image." })
+        .status(400);
     }
-
-  
 
     try {
       const hashedImageAndKey = crypto
@@ -113,17 +140,16 @@ app.post("/imageup", async (c) => {
         .update(decryptedImage + clientEncryptionKey)
         .digest("hex");
 
-
       const decryptedSignature = decryptData(
         Buffer.from(clientSignature),
         privateKey
       );
 
       if (hashedImageAndKey !== decryptedSignature.toString()) {
-        return c.json({ error: "Data integrity check failed." }, 400);
+        return res.json({ error: "Data integrity check failed." }).status(400);
       }
     } catch (e) {
-      return c.json({ error: "Data integrity check failed." }, 400);
+      return res.json({ error: "Data integrity check failed." }).status(400);
     }
 
     // OCR and response
@@ -132,25 +158,46 @@ app.post("/imageup", async (c) => {
       // Encrypt recognizedText with clientKey
       const encryptedText = encryptData(recognizedText, clientEncryptionKey);
       const signature = signData(encryptedText);
-      return c.json({
-        text: encryptedText,
-        signature: signature,
-      });
+      return res
+        .json({
+          text: encryptedText,
+          signature: signature,
+        })
+        .status(200);
     } catch (e) {
-      return c.json({ error: "Failed to process image." }, 400);
+      return res.json({ error: "Failed to process image." }).status(500);
     }
   } catch (err) {
     console.error("Image upload error:", err);
-    return c.json({ error: "Failed to upload image." }, 500);
+    return res.json({ error: "Failed to upload image." }).status(500);
   }
 });
 
-serve(
-  {
-    fetch: app.fetch,
-    port: 3000,
-  },
-  (info) => {
-    console.log(`Server is running on http://localhost:${info.port}`);
-  }
-);
+// Create HTTPS server with mTLS
+const tlsOptions: https.ServerOptions = {
+  key: fs.readFileSync("/run/secrets/backend_server.key"),
+  cert: fs.readFileSync("/run/secrets/backend_server.crt"),
+  ca: fs.readFileSync("/run/secrets/frontend_clients_ca.crt"),
+  requestCert: true,
+  rejectUnauthorized: true,
+};
+
+const server = https.createServer(tlsOptions, app);
+
+// Add error handlers for better debugging
+server.on("error", (err) => {
+  console.error("Server error:", err);
+});
+
+server.on("clientError", (err, socket) => {
+  console.error("Client error:", err.message);
+  socket.destroy();
+});
+
+server.on("tlsClientError", (err, tlsSocket) => {
+  console.error("TLS Client error:", err.message);
+});
+
+server.listen(3000, "0.0.0.0", () => {
+  console.log("mTLS server running on https://0.0.0.0:3000");
+});

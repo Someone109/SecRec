@@ -3,7 +3,7 @@ import fs from "fs";
 import path from "path";
 
 // Allow configuration via environment variables
-const REDIS_HOST = process.env.REDIS_HOST || "redisKeyStore-tls";
+const REDIS_HOST = process.env.REDIS_HOST || "redisKeyStore";
 const REDIS_PORT = process.env.REDIS_PORT || "16379";
 const REDIS_URL =
   process.env.REDIS_URL || `rediss://${REDIS_HOST}:${REDIS_PORT}`;
