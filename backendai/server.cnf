@@ -1,0 +1,14 @@
+[req]
+distinguished_name = dn
+req_extensions = req_ext
+prompt = no
+
+[dn]
+CN = backendai-app
+O = YourOrg
+
+[req_ext]
+subjectAltName = @alt_names
+
+[alt_names]
+DNS.1 = backendai-app
